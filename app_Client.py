@@ -1043,6 +1043,24 @@ def afficher_sidebar():
         key="pac_active"
     )
 
+
+
+    coeffs_pac_defaut = {
+        1: 1.40,   # janvier
+        2: 1.30,
+        3: 1.10,
+        4: 0.80,
+        5: 0.40,
+        6: 0.20,
+        7: 0.10,
+        8: 0.10,
+        9: 0.30,
+        10: 0.70,
+        11: 1.10,
+        12: 1.40
+    }
+
+
     puissance_pac_kw = 0.0
     horaires_pac = "6-9;17-22"
     jours_pac = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
@@ -2781,12 +2799,30 @@ def main():
             df["Conso_ChauffeEau"] = 0.0
 
         if sidebar_data["pac_active"]:
-            df["Conso_PAC"] = generer_profil_borne(
+            conso_pac_base = generer_profil_borne(
                 df["Date&Time"],
                 sidebar_data["puissance_pac_kw"],
                 sidebar_data["horaires_pac"],
                 sidebar_data["jours_pac"]
             )
+
+            coeffs_pac_mensuels = {
+                1: 1.40, 2: 1.30, 3: 1.10, 4: 0.80,
+                5: 0.40, 6: 0.20, 7: 0.10, 8: 0.10,
+                9: 0.30, 10: 0.70, 11: 1.10, 12: 1.40
+            }
+
+            coeff_pac = df["Date&Time"].dt.month.map(coeffs_pac_mensuels).fillna(1.0)
+            conso_pac_modulee = conso_pac_base * coeff_pac
+
+            total_base = conso_pac_base.sum()
+            total_module = conso_pac_modulee.sum()
+
+            if total_module > 0:
+                facteur_correction = total_base / total_module
+                df["Conso_PAC"] = conso_pac_modulee * facteur_correction
+            else:
+                df["Conso_PAC"] = conso_pac_modulee
         else:
             df["Conso_PAC"] = 0.0
 
