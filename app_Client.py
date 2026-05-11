@@ -30,7 +30,7 @@ def initialiser_session_state():
     valeurs_defaut = {
         "acces_config": False,
         "cout_pv_par_wc": 1.50,
-        "cout_batterie_par_wh": 0.75,
+        "cout_batterie_par_wh": 1.00,
         "prix_electricite": 0.27,
         "prix_injection": 0.05,
         "prix_communaute_achat": 0.27,
@@ -38,11 +38,19 @@ def initialiser_session_state():
         "aide_pv_active": True,
         "aide_batterie_active": True,
         "cout_ems": 1500.0,
+
+        "subside_supplementaire": 0.0,
+        "taux_croissance_elec_annuel": 0.0,
+        "cout_om_pv_par_wc_an": 0.0,
+        "cout_om_batterie_par_wh_an": 0.0,
+        "perte_pv_annuelle": 0.0,
+        "perte_batterie_annuelle": 0.0,
+        "coeffs_pac_mensuels": [1.40, 1.30, 1.10, 0.80, 0.40, 0.20, 0.10, 0.10, 0.30, 0.70, 1.10, 1.40],
     }
+
     for cle, valeur in valeurs_defaut.items():
         if cle not in st.session_state:
             st.session_state[cle] = valeur
-
 # ==========================================
 # CSS
 # ==========================================
@@ -488,10 +496,23 @@ def charger_projet_client(tab_chargement):
 
         projet_client = json.load(fichier_json)
 
+        nom_fichier_json = fichier_json.name
+
+        if st.session_state.get("dernier_fichier_json_client") != nom_fichier_json:
+            st.session_state["json_client_deja_charge"] = False
+            st.session_state["dernier_fichier_json_client"] = nom_fichier_json
+
+
+
+
+
+
         if "production_consommation_horaire" not in projet_client:
             st.error("Le fichier JSON importé ne contient pas les données horaires nécessaires.")
             st.write("Clés trouvées :", list(projet_client.keys()))
             return None
+        
+
 
         cles_a_recharger = [
             "augmentation_prod_pct",
@@ -524,11 +545,29 @@ def charger_projet_client(tab_chargement):
             "cout_pv_par_wc",
             "cout_batterie_par_wh",
             "cout_ems",
+            "subside_supplementaire",
+            "taux_croissance_elec_annuel",
+            "cout_om_pv_par_wc_an",
+            "cout_om_batterie_par_wh_an",
+            "perte_pv_annuelle",
+            "perte_batterie_annuelle",
+            "coeffs_pac_mensuels",
         ]
 
-        for cle in cles_a_recharger:
-            if cle in projet_client:
-                st.session_state[cle] = projet_client[cle]
+        if "json_client_deja_charge" not in st.session_state:
+            st.session_state["json_client_deja_charge"] = False
+
+        if not st.session_state["json_client_deja_charge"]:
+
+            for cle in cles_a_recharger:
+                if cle in projet_client:
+                    st.session_state[cle] = projet_client[cle]
+
+            if "coeffs_pac_mensuels" in projet_client:
+                for i, val in enumerate(projet_client["coeffs_pac_mensuels"]):
+                    st.session_state[f"coeff_pac_{i}"] = val
+
+            st.session_state["json_client_deja_charge"] = True
 
         mon_tableau_base = pd.DataFrame(
             projet_client["production_consommation_horaire"]
@@ -662,13 +701,33 @@ def calculer_budget(puissance_crete, activer_batterie, capa_kwh, capa_wh, aide_p
         aide_batterie = 0.0
         texte_aide_batterie = "Aucune batterie activée."
 
-    aide_totale = round(aide_pv + aide_batterie, 2)
+    subside_supplementaire = st.session_state.get("subside_supplementaire", 0.0)
+
+    aide_totale = round(aide_pv + aide_batterie + subside_supplementaire, 2)
+
+
 
     cout_pv = round(puissance_crete * 1000 * st.session_state["cout_pv_par_wc"], 2)
     cout_batterie = round(capa_wh * st.session_state["cout_batterie_par_wh"], 2) if activer_batterie and capa_wh > 0 else 0.0
 
     cout_total_brut = round(cout_pv + cout_batterie, 2)
     cout_total_net = round(cout_total_brut - aide_totale, 2)
+
+
+
+    cout_om_pv_annuel = round(
+        puissance_crete * 1000 * st.session_state["cout_om_pv_par_wc_an"],
+        2
+    )
+
+    cout_om_batterie_annuel = round(
+        capa_wh * st.session_state["cout_om_batterie_par_wh_an"],
+        2
+    ) if activer_batterie and capa_wh > 0 else 0.0
+
+    cout_om_total_annuel = round(cout_om_pv_annuel + cout_om_batterie_annuel, 2)
+
+
 
     return {
         "aide_pv": aide_pv,
@@ -682,9 +741,13 @@ def calculer_budget(puissance_crete, activer_batterie, capa_kwh, capa_wh, aide_p
         "cout_batterie": cout_batterie,
         "cout_total_brut": cout_total_brut,
         "cout_total_net": cout_total_net,
+        "cout_om_pv_annuel": cout_om_pv_annuel,
+        "cout_om_batterie_annuel": cout_om_batterie_annuel,
+        "cout_om_total_annuel": cout_om_total_annuel,
+        "subside_supplementaire": subside_supplementaire,
     }
 
-def calculer_analyse_financiere(mon_tableau, cout_total_net):
+def calculer_analyse_financiere(mon_tableau, cout_total_net, cout_om_annuel=0.0):
     prix_electricite = st.session_state["prix_electricite"]
     prix_injection = st.session_state["prix_injection"]
     prix_communaute_achat = st.session_state["prix_communaute_achat"]
@@ -697,18 +760,19 @@ def calculer_analyse_financiere(mon_tableau, cout_total_net):
     total_batterie_kwh = mon_tableau['Decharge_Batterie'].sum() / 1000
 
     cout_sans_installation = round(total_conso_kwh * prix_electricite, 2)
+
     economie_auto_directe = round(total_auto_directe_kwh * prix_electricite, 2)
     economie_batterie = round(total_batterie_kwh * prix_electricite, 2)
 
     cout_import_normal = round(total_import_kwh * prix_electricite, 2)
     revenu_export_normal = round(total_export_kwh * prix_injection, 2)
     solde_normal = round(cout_import_normal - revenu_export_normal, 2)
-    gain_normal = round(cout_sans_installation - solde_normal, 2)
+    gain_normal_avant_om = round(cout_sans_installation - solde_normal, 2)
 
     cout_import_communaute = round(total_import_kwh * prix_communaute_achat, 2)
     revenu_export_communaute = round(total_export_kwh * prix_communaute_vente, 2)
     solde_communaute = round(cout_import_communaute - revenu_export_communaute, 2)
-    gain_communaute = round(cout_sans_installation - solde_communaute, 2)
+    gain_communaute_avant_om = round(cout_sans_installation - solde_communaute, 2)
 
     cout_import_mix = round(
         0.5 * total_import_kwh * prix_communaute_achat
@@ -723,7 +787,19 @@ def calculer_analyse_financiere(mon_tableau, cout_total_net):
     )
 
     solde_mix = round(cout_import_mix - revenu_export_mix, 2)
-    gain_mix = round(cout_sans_installation - solde_mix, 2)
+    gain_mix_avant_om = round(cout_sans_installation - solde_mix, 2)
+
+
+
+
+
+    gain_normal = round(gain_normal_avant_om - cout_om_annuel, 2)
+    gain_mix = round(gain_mix_avant_om - cout_om_annuel, 2)
+    gain_communaute = round(gain_communaute_avant_om - cout_om_annuel, 2)
+
+
+
+
 
     if gain_normal != 0:
         pct_gain_communaute = round(((gain_communaute - gain_normal) / gain_normal) * 100, 1)
@@ -732,44 +808,121 @@ def calculer_analyse_financiere(mon_tableau, cout_total_net):
         pct_gain_communaute = 0.0
         pct_gain_mix = 0.0
 
+
     tr_normal = (cout_total_net / gain_normal) if gain_normal > 0 else None
     tr_mix = (cout_total_net / gain_mix) if gain_mix > 0 else None
     tr_communaute = (cout_total_net / gain_communaute) if gain_communaute > 0 else None
+
+
+    _, gain_cumule_10_normal = calculer_gains_cumules_avec_croissance(gain_normal, nb_annees=10)
+    _, gain_cumule_10_mix = calculer_gains_cumules_avec_croissance(gain_mix, nb_annees=10)
+    _, gain_cumule_10_communaute = calculer_gains_cumules_avec_croissance(gain_communaute, nb_annees=10)
 
     return {
         "prix_electricite": prix_electricite,
         "prix_injection": prix_injection,
         "prix_communaute_achat": prix_communaute_achat,
         "prix_communaute_vente": prix_communaute_vente,
+
         "total_conso_kwh": total_conso_kwh,
         "total_import_kwh": total_import_kwh,
         "total_export_kwh": total_export_kwh,
         "total_auto_directe_kwh": total_auto_directe_kwh,
         "total_batterie_kwh": total_batterie_kwh,
+
         "cout_sans_installation": cout_sans_installation,
         "economie_auto_directe": economie_auto_directe,
         "economie_batterie": economie_batterie,
+
         "cout_import_normal": cout_import_normal,
         "revenu_export_normal": revenu_export_normal,
         "solde_normal": solde_normal,
-        "gain_normal": gain_normal,
+
         "cout_import_communaute": cout_import_communaute,
         "revenu_export_communaute": revenu_export_communaute,
         "solde_communaute": solde_communaute,
-        "gain_communaute": gain_communaute,
+
         "cout_import_mix": cout_import_mix,
         "revenu_export_mix": revenu_export_mix,
         "solde_mix": solde_mix,
+
+        "cout_om_annuel": cout_om_annuel,
+
+        "gain_normal_avant_om": gain_normal_avant_om,
+        "gain_mix_avant_om": gain_mix_avant_om,
+        "gain_communaute_avant_om": gain_communaute_avant_om,
+
+        "gain_normal": gain_normal,
         "gain_mix": gain_mix,
+        "gain_communaute": gain_communaute,
+
         "pct_gain_communaute": pct_gain_communaute,
         "pct_gain_mix": pct_gain_mix,
+
         "tr_normal": tr_normal,
         "tr_mix": tr_mix,
         "tr_communaute": tr_communaute,
-        "gain_10_ans_normal": round(gain_normal * 10, 2),
-        "gain_10_ans_mix": round(gain_mix * 10, 2),
-        "gain_10_ans_communaute": round(gain_communaute * 10, 2),
+
+
+        "gain_10_ans_normal": round(float(np.asarray(gain_cumule_10_normal).ravel()[-1]), 2),
+        "gain_10_ans_mix": round(float(np.asarray(gain_cumule_10_mix).ravel()[-1]), 2),
+        "gain_10_ans_communaute": round(float(np.asarray(gain_cumule_10_communaute).ravel()[-1]), 2),
     }
+
+def calculer_gains_cumules_avec_croissance(
+    gain_annuel_initial,
+    nb_annees=15,
+    part_batterie=0.0
+):
+    taux_croissance = st.session_state.get("taux_croissance_elec_annuel", 0.0) / 100
+    perte_pv = st.session_state.get("perte_pv_annuelle", 0.0) / 100
+    perte_batterie = st.session_state.get("perte_batterie_annuelle", 0.0) / 100
+
+    gains_annuels = []
+    gains_cumules = []
+
+    cumul = 0.0
+
+    for annee in range(nb_annees):
+        facteur_prix = (1 + taux_croissance) ** annee
+        facteur_pv = (1 - perte_pv) ** annee
+        facteur_batterie = (1 - perte_batterie) ** annee
+
+        gain_pv = gain_annuel_initial * (1 - part_batterie)
+        gain_batterie = gain_annuel_initial * part_batterie
+
+        gain_annee = (
+            gain_pv * facteur_pv
+            + gain_batterie * facteur_pv * facteur_batterie
+        ) * facteur_prix
+
+        cumul += gain_annee
+
+        gains_annuels.append(gain_annee)
+        gains_cumules.append(cumul)
+
+    return np.array(gains_annuels), np.array(gains_cumules)
+
+def calculer_roi_depuis_gains_cumules(cout_net, gains_cumules):
+    gains_cumules = np.asarray(gains_cumules, dtype=float)
+
+    for i, gain_cumule in enumerate(gains_cumules):
+        if gain_cumule >= cout_net:
+            if i == 0:
+                return 1.0
+
+            gain_avant = gains_cumules[i - 1]
+            gain_apres = gains_cumules[i]
+
+            if gain_apres == gain_avant:
+                return float(i + 1)
+
+            fraction = (cout_net - gain_avant) / (gain_apres - gain_avant)
+
+            return round(i + fraction, 1)
+
+    return None
+
 
 # ==========================================
 # AFFICHAGE EN-TÊTE
@@ -861,6 +1014,8 @@ def afficher_sidebar():
     capa_wh_utile = 0.0
     capa_kwh_nominale = 0.0
     capa_wh_nominale = 0.0
+    capa_kwh_commerciale = 0.0
+    capa_wh_commerciale = 0.0
 
     if activer_batterie and not df_batteries.empty:
         liste_batteries = df_batteries['Référence'].tolist()
@@ -883,10 +1038,17 @@ def afficher_sidebar():
 
         capa_kwh_utile = float(str(infos_batterie['Energie util']).replace(',', '.'))
         capa_kwh_nominale = float(str(infos_batterie['Energie nom totale (kWh)']).replace(',', '.'))
+
+        if "Capacité commerciale (kWh)" in infos_batterie.index:
+            capa_kwh_commerciale = float(str(infos_batterie["Capacité commerciale (kWh)"]).replace(",", "."))
+        else:
+            capa_kwh_commerciale = capa_kwh_nominale
+
         puiss_kw = float(str(infos_batterie['P charge / décharge']).replace(',', '.'))
 
         capa_wh_utile = capa_kwh_utile * 1000
         capa_wh_nominale = capa_kwh_nominale * 1000
+        capa_wh_commerciale = capa_kwh_commerciale * 1000
 
         # Simulation énergétique = énergie utile
         capa_kwh = capa_kwh_utile
@@ -894,8 +1056,9 @@ def afficher_sidebar():
         puiss_w = puiss_kw * 1000
 
         st.sidebar.info(
-            f"Capacité utile : {capa_kwh_utile:.2f} kWh\n"
-            f"Capacité nominale : {capa_kwh_nominale:.2f} kWh\n"
+            f"Capacité utile : {capa_kwh_utile:.2f} kWh  \n"
+            f"Capacité nominale : {capa_kwh_nominale:.2f} kWh  \n"
+            f"Capacité commerciale : {capa_kwh_commerciale:.2f} kWh  \n"
             f"Puissance Max : {puiss_kw:.2f} kW"
         )
 
@@ -1061,13 +1224,16 @@ def afficher_sidebar():
     }
 
 
+
+
+
     puissance_pac_kw = 0.0
     horaires_pac = "6-9;17-22"
     jours_pac = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
 
     if pac_active:
         if "puissance_pac_kw" not in st.session_state:
-            st.session_state["puissance_pac_kw"] = 2.5
+            st.session_state["puissance_pac_kw"] = 1.5
 
         puissance_pac_kw = st.sidebar.number_input(
             "Puissance pompe à chaleur (kW)",
@@ -1076,7 +1242,7 @@ def afficher_sidebar():
             key="puissance_pac_kw"
         )
         if "horaires_pac" not in st.session_state:
-            st.session_state["horaires_pac"] = "6-8;17-21"
+            st.session_state["horaires_pac"] = "6-7;16-17;22-23"
 
         horaires_pac = st.sidebar.text_input(
             "Plage horaire PAC",
@@ -1091,6 +1257,35 @@ def afficher_sidebar():
             ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"],
             key="jours_pac"
         )
+
+        st.sidebar.markdown("**Coefficients mensuels PAC**")
+
+        coeffs_pac_defaut = [1.40, 1.30, 1.10, 0.80, 0.40, 0.20, 0.10, 0.10, 0.30, 0.70, 1.10, 1.40]
+        mois_pac = ["Jan", "Fév", "Mar", "Avr", "Mai", "Juin", "Juil", "Aoû", "Sep", "Oct", "Nov", "Déc"]
+
+        if "coeffs_pac_mensuels" not in st.session_state:
+            st.session_state["coeffs_pac_mensuels"] = coeffs_pac_defaut.copy()
+
+        coeffs_pac_mensuels = []
+
+        for i, mois in enumerate(mois_pac):
+            cle_coeff_pac = f"coeff_pac_{i}"
+
+            if cle_coeff_pac not in st.session_state:
+                st.session_state[cle_coeff_pac] = st.session_state["coeffs_pac_mensuels"][i]
+
+            coeff = st.sidebar.number_input(
+                mois,
+                min_value=0.0,
+                max_value=3.0,
+                step=0.05,
+                key=cle_coeff_pac
+            )
+
+            coeffs_pac_mensuels.append(coeff)
+
+        st.session_state["coeffs_pac_mensuels"] = coeffs_pac_mensuels
+
 
 
 
@@ -1241,6 +1436,12 @@ def afficher_sidebar():
         "capa_wh_utile": capa_wh_utile,
         "capa_kwh_nominale": capa_kwh_nominale,
         "capa_wh_nominale": capa_wh_nominale,
+        "capa_kwh_commerciale": capa_kwh_commerciale,
+        "capa_wh_commerciale": capa_wh_commerciale,
+        "coeffs_pac_mensuels": st.session_state.get(
+            "coeffs_pac_mensuels",
+            [1.40, 1.30, 1.10, 0.80, 0.40, 0.20, 0.10, 0.10, 0.30, 0.70, 1.10, 1.40]
+        ),
     }
 
 # ==========================================
@@ -1908,6 +2109,21 @@ def afficher_onglet_budget(tab_budget, budget, puissance_crete, activer_batterie
         "></div>
         """, unsafe_allow_html=True)
 
+        st.markdown("### Subsides supplémentaires")
+
+        st.session_state["subside_supplementaire"] = st.number_input(
+            "Montant du subside supplémentaire (€)",
+            min_value=0.0,
+            value=st.session_state.get("subside_supplementaire", 0.0),
+            step=100.0
+        )
+
+        if st.session_state["subside_supplementaire"] > 0:
+            st.info(
+                f"Subside supplémentaire ajouté : "
+                f"{st.session_state['subside_supplementaire']:,.2f} €".replace(",", " ")
+            )
+
         budget = calculer_budget(
             puissance_crete=puissance_crete,
             activer_batterie=activer_batterie,
@@ -1920,6 +2136,7 @@ def afficher_onglet_budget(tab_budget, budget, puissance_crete, activer_batterie
         aide_pv = budget["aide_pv"]
         aide_batterie = budget["aide_batterie"]
         aide_totale = budget["aide_totale"]
+        subside_supplementaire = budget.get("subside_supplementaire", 0.0)
         texte_aide_pv = budget["texte_aide_pv"]
         texte_aide_batterie = budget["texte_aide_batterie"]
         capacite_batterie_arrondie = budget["capacite_batterie_arrondie"]
@@ -1928,6 +2145,9 @@ def afficher_onglet_budget(tab_budget, budget, puissance_crete, activer_batterie
         cout_batterie = budget["cout_batterie"]
         cout_total_brut = budget["cout_total_brut"]
         cout_total_net = budget["cout_total_net"]
+        cout_om_pv_annuel = budget.get("cout_om_pv_annuel", 0.0)
+        cout_om_batterie_annuel = budget.get("cout_om_batterie_annuel", 0.0)
+        cout_om_total_annuel = budget.get("cout_om_total_annuel", 0.0)
 
         col_gauche, col_droite = st.columns(2)
 
@@ -1957,6 +2177,8 @@ def afficher_onglet_budget(tab_budget, budget, puissance_crete, activer_batterie
                     </div>
                 </div>
 
+                <li>Subside supplémentaire : <strong>{f"{subside_supplementaire:,.2f} €".replace(",", " ")}</strong></li>
+
                 <div style="font-size:15px; color:#3f4d5a; line-height:1.6;">
                     <h4 style="margin:18px 0 8px 0; font-size:18px; font-weight:700; color:#24394d;">Photovoltaïque</h4>
                     <ul style="margin-top:8px; padding-left:20px;">
@@ -1971,7 +2193,7 @@ def afficher_onglet_budget(tab_budget, budget, puissance_crete, activer_batterie
                     </ul>
                 </div>
             </div>
-            """, height=400)
+            """, height=460)
 
         with col_droite:
             components.html(f"""
@@ -2001,13 +2223,38 @@ def afficher_onglet_budget(tab_budget, budget, puissance_crete, activer_batterie
 
                 <div style="font-size:15px; color:#3f4d5a; line-height:1.6;">
                     <h4 style="margin:18px 0 8px 0; font-size:18px; font-weight:700; color:#24394d;">Hypothèses économiques (Prix du marché)</h4>
-                    <ul style="margin-top:8px; padding-left:20px;">
-                        <li>Coût PV : <strong>{st.session_state["cout_pv_par_wc"]:.2f} €/Wc</strong></li>
-                        <li>Coût batterie : <strong>{st.session_state["cout_batterie_par_wh"]:.2f} €/Wh</strong></li>
-                    </ul>
+                        <ul style="margin-top:8px; padding-left:20px;">
+                            <li>Coût PV : <strong>{st.session_state["cout_pv_par_wc"]:.2f} €/Wc</strong></li>
+                            <li>Coût batterie : <strong>{st.session_state["cout_batterie_par_wh"]:.2f} €/Wh</strong></li>
+                            <li>O&M PV annuel : <strong>{f"{cout_om_pv_annuel:,.2f} €".replace(",", " ")}/an</strong></li>
+                            <li>O&M batterie annuel : <strong>{f"{cout_om_batterie_annuel:,.2f} €".replace(",", " ")}/an</strong></li>
+                            <li>O&M total annuel : <strong>{f"{cout_om_total_annuel:,.2f} €".replace(",", " ")}/an</strong></li>
+                        </ul>
                 </div>
             </div>
             """, height=400)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
         components.html(f"""
         <div style="
@@ -2054,6 +2301,15 @@ def afficher_onglet_budget(tab_budget, budget, puissance_crete, activer_batterie
         </small>
         """, unsafe_allow_html=True)
 
+
+
+
+
+
+
+
+
+
 # ==========================================
 # ONGLET ANALYSE FINANCIERE
 # ==========================================
@@ -2081,7 +2337,11 @@ def afficher_onglet_finance(
         )
 
         cout_total_net = budget["cout_total_net"]
-        finance = calculer_analyse_financiere(mon_tableau, cout_total_net)
+        finance = calculer_analyse_financiere(
+            mon_tableau,
+            cout_total_net,
+            cout_om_annuel=budget.get("cout_om_total_annuel", 0.0)
+        )
         
         with st.expander("⚙️ Hypothèses de calcul", expanded=False):
             h1, h2, h3, h4 = st.columns(4)
@@ -2339,7 +2599,11 @@ def afficher_onglet_finance(
         nb_annees_roi = 15
         annees_roi = np.arange(1, nb_annees_roi + 1)
 
-        gains_cumules_pv = finance_pv["gain_normal"] * annees_roi
+        _, gains_cumules_pv = calculer_gains_cumules_avec_croissance(
+            finance_pv["gain_normal"],
+            nb_annees_roi
+        )
+
         cout_net_pv = budget_pv["cout_total_net"]
 
 
@@ -2364,9 +2628,21 @@ def afficher_onglet_finance(
             label="Coût net PV",
             color="#2F87C8"
         )
-
+        part_batterie = 0.0
         if scenario_batterie_disponible and finance_pv_batt is not None and budget_pv_batt is not None:
-            gains_cumules_pv_batt = finance_pv_batt["gain_normal"] * annees_roi
+
+
+            part_batterie = (
+                finance_pv_batt["economie_batterie"] / finance_pv_batt["gain_normal"]
+                if finance_pv_batt["gain_normal"] > 0 else 0.0
+            )
+
+            _, gains_cumules_pv_batt = calculer_gains_cumules_avec_croissance(
+                finance_pv_batt["gain_normal"],
+                nb_annees_roi,
+                part_batterie=part_batterie
+            )
+
             cout_net_pv_batt = budget_pv_batt["cout_total_net"]
 
             ax_roi.plot(
@@ -2389,7 +2665,15 @@ def afficher_onglet_finance(
             )
 
         if resultats_ems is not None and budget_pv_batt_ems is not None and gain_total_ems is not None:
-            gains_cumules_ems = gain_total_ems * annees_roi
+            
+            
+            _, gains_cumules_ems = calculer_gains_cumules_avec_croissance(
+                gain_total_ems,
+                nb_annees_roi,
+                part_batterie=part_batterie
+            )
+
+
             cout_net_ems = budget_pv_batt_ems["cout_total_net"]
 
             ax_roi.plot(
@@ -2428,7 +2712,24 @@ def afficher_onglet_finance(
 
 
 
+        roi_pv_projete = calculer_roi_depuis_gains_cumules(
+            budget_pv["cout_total_net"],
+            gains_cumules_pv
+        )
 
+        roi_pv_batt_projete = None
+        if scenario_batterie_disponible and finance_pv_batt is not None and budget_pv_batt is not None:
+            roi_pv_batt_projete = calculer_roi_depuis_gains_cumules(
+                budget_pv_batt["cout_total_net"],
+                gains_cumules_pv_batt
+            )
+
+        roi_ems_projete = None
+        if resultats_ems is not None and budget_pv_batt_ems is not None and gain_total_ems is not None:
+            roi_ems_projete = calculer_roi_depuis_gains_cumules(
+                budget_pv_batt_ems["cout_total_net"],
+                gains_cumules_ems
+            )
 
 
 
@@ -2439,29 +2740,20 @@ def afficher_onglet_finance(
         with r1:
             st.metric(
                 "ROI estimé - Avec PV",
-                f"{finance_pv['tr_normal']:.1f} ans" if finance_pv["tr_normal"] is not None else "Non calculable"
+                f"{roi_pv_projete} ans" if roi_pv_projete is not None else "Non calculable"
             )
 
         with r2:
-            if scenario_batterie_disponible and finance_pv_batt is not None:
-                st.metric(
-                    "ROI estimé - Avec PV + batterie",
-                    f"{finance_pv_batt['tr_normal']:.1f} ans" if finance_pv_batt["tr_normal"] is not None else "Non calculable"
-                )
-            else:
-                st.metric("ROI estimé - Avec PV + batterie", "—")
+            st.metric(
+                "ROI estimé - Avec PV + batterie",
+                f"{roi_pv_batt_projete} ans" if roi_pv_batt_projete is not None else "—"
+            )
 
         with r3:
-            if resultats_ems is not None and budget_pv_batt_ems is not None and gain_total_ems is not None:
-                tr_ems = budget_pv_batt_ems["cout_total_net"] / gain_total_ems if gain_total_ems > 0 else None
-
-                st.metric(
-                    "ROI estimé - PV + batterie + EMS",
-                    f"{tr_ems:.1f} ans" if tr_ems is not None else "Non calculable"
-                )
-            else:
-                st.metric("ROI estimé - EMS", "—")
-
+            st.metric(
+                "ROI estimé - PV + batterie + EMS",
+                f"{roi_ems_projete} ans" if roi_ems_projete is not None else "—"
+            )
 
 
 
@@ -2550,6 +2842,44 @@ def afficher_onglet_finance(
         "></div>
         """, unsafe_allow_html=True)
 
+
+
+        nb_annees = 15
+        annees = np.arange(1, nb_annees + 1)
+
+        _, gains_cumules_normal = calculer_gains_cumules_avec_croissance(
+            finance["gain_normal"],
+            nb_annees
+        )
+
+        _, gains_cumules_mix = calculer_gains_cumules_avec_croissance(
+            finance["gain_mix"],
+            nb_annees
+        )
+
+        _, gains_cumules_communaute = calculer_gains_cumules_avec_croissance(
+            finance["gain_communaute"],
+            nb_annees
+        )
+
+        roi_normal_projete = calculer_roi_depuis_gains_cumules(
+            budget["cout_total_net"],
+            gains_cumules_normal
+        )
+
+        roi_mix_projete = calculer_roi_depuis_gains_cumules(
+            budget["cout_total_net"],
+            gains_cumules_mix
+        )
+
+        roi_communaute_projete = calculer_roi_depuis_gains_cumules(
+            budget["cout_total_net"],
+            gains_cumules_communaute
+        )
+
+
+
+
         st.subheader("Scénarios avec communautés énergétiques 🏘️")
         st.markdown(
             "<p style='color: black; font-size: 14px; margin-top: -8px;'>"
@@ -2560,15 +2890,40 @@ def afficher_onglet_finance(
         k1, k2, k3 = st.columns(3)
 
         with k1:
-            st.markdown(f"""
-            <div class="finance-card finance-card-blue">
-                <div class="finance-title">📘 Mode normal</div>
-                <div class="finance-subtitle">Gain annuel estimé</div>
-                <div class="finance-big">{f"{finance['gain_normal']:,.2f} €".replace(",", " ")}</div>
-                <div class="finance-small">Temps de retour : <strong>{f"{finance['tr_normal']:.1f} ans" if finance['tr_normal'] is not None else "Non calculable"}</strong></div>
-                <div class="finance-small">Gain cumulé à 10 ans : <strong>{f"{finance['gain_10_ans_normal']:,.2f} €".replace(",", " ")}</strong></div>
+            components.html(f"""
+            <div style="
+                background: linear-gradient(180deg, #eef7ff, #e3f1ff);
+                border: 1px solid #bcdcff;
+                border-radius: 18px;
+                padding: 18px 20px;
+                box-shadow: 0 4px 14px rgba(0,0,0,0.06);
+                margin-bottom: 18px;
+                font-family: Arial, sans-serif;
+            ">
+                <div style="font-size:22px; font-weight:700; color:#1f2c3a; margin-bottom:10px;">📘 Mode normal</div>
+
+                <div style="font-size:15px; color:#4b5a68; margin-bottom:8px;">
+                    Gain annuel estimé
+                </div>
+
+                <div style="font-size:26px; font-weight:800; color:#13283a; margin-bottom:8px;">
+                    {f"{finance['gain_normal']:,.2f} €".replace(",", " ")}
+                </div>
+
+                <div style="font-size:14px; color:#506070; line-height:1.5;">
+                    Gain cumulé à 10 ans : <strong>{f"{finance['gain_10_ans_normal']:,.2f} €".replace(",", " ")}</strong>
+                </div>
+
+                <div style="font-size:14px; color:#506070; line-height:1.5;">
+                    Économie autoconsommation directe : <strong>{f"{finance['economie_auto_directe']:,.2f} €".replace(",", " ")}</strong>
+                </div>
+
+                <div style="font-size:14px; color:#506070; line-height:1.5;">
+                    Économie via batterie : <strong>{f"{finance['economie_batterie']:,.2f} €".replace(",", " ")}</strong>
+                </div>
             </div>
-            """, unsafe_allow_html=True)
+            """, height=220)
+
 
         with k2:
             components.html(f"""
@@ -2594,14 +2949,15 @@ def afficher_onglet_finance(
                     {f"{finance['gain_mix']:,.2f} €".replace(",", " ")}
                 </div>
 
-                <div style="font-size:14px; color:#506070; line-height:1.5;">
-                    Temps de retour : <strong>{f"{finance['tr_mix']:.1f} ans" if finance['tr_mix'] is not None else "Non calculable"}</strong>
-                </div>
+
                 <div style="font-size:14px; color:#506070; line-height:1.5;">
                     Gain cumulé à 10 ans : <strong>{f"{finance['gain_10_ans_mix']:,.2f} €".replace(",", " ")}</strong>
                 </div>
             </div>
             """, height=220)
+
+
+
 
         with k3:
             components.html(f"""
@@ -2627,34 +2983,16 @@ def afficher_onglet_finance(
                     {f"{finance['gain_communaute']:,.2f} €".replace(",", " ")}
                 </div>
 
-                <div style="font-size:14px; color:#506070; line-height:1.5;">
-                    Temps de retour : <strong>{f"{finance['tr_communaute']:.1f} ans" if finance['tr_communaute'] is not None else "Non calculable"}</strong>
-                </div>
+
                 <div style="font-size:14px; color:#506070; line-height:1.5;">
                     Gain cumulé à 10 ans : <strong>{f"{finance['gain_10_ans_communaute']:,.2f} €".replace(",", " ")}</strong>
                 </div>
             </div>
             """, height=220)
 
-        st.markdown(f"""
-        <div class="finance-roi-box">
-            <div class="finance-title">⏱ Temps de retour estimé (mode normal)</div>
-            <div class="finance-big">{f"{finance['tr_normal']:.1f} ans" if finance['tr_normal'] is not None else "Non calculable"}</div>
-            <div class="finance-small">
-                Économies annuelles via autoconsommation directe : <strong>{f"{finance['economie_auto_directe']:,.2f} €".replace(",", " ")}</strong><br>
-                Économies annuelles via batterie : <strong>{f"{finance['economie_batterie']:,.2f} €".replace(",", " ")}</strong>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
 
 
 
-        nb_annees = 15
-        annees = np.arange(1, nb_annees + 1)
-
-        gains_cumules_normal = finance["gain_normal"] * annees
-        gains_cumules_mix = finance["gain_mix"] * annees
-        gains_cumules_communaute = finance["gain_communaute"] * annees
 
         fig_compare, ax = plt.subplots(figsize=(8, 4))
 
@@ -2676,6 +3014,30 @@ def afficher_onglet_finance(
         ax.tick_params(axis='y', labelsize=7.5)
 
         st.pyplot(fig_compare, use_container_width=False)
+
+
+
+        r_comm_1, r_comm_2, r_comm_3 = st.columns(3)
+
+        with r_comm_1:
+            st.metric(
+                "ROI estimé - Mode normal",
+                f"{roi_normal_projete:.1f} ans" if roi_normal_projete is not None else "Non calculable"
+            )
+
+        with r_comm_2:
+            st.metric(
+                "ROI estimé - Communauté 50 %",
+                f"{roi_mix_projete:.1f} ans" if roi_mix_projete is not None else "Non calculable"
+            )
+
+        with r_comm_3:
+            st.metric(
+                "ROI estimé - Communauté",
+                f"{roi_communaute_projete:.1f} ans" if roi_communaute_projete is not None else "Non calculable"
+            )
+
+
 
 
         with st.expander("📘 Détail – Mode normal", expanded=False):
@@ -2711,6 +3073,12 @@ def afficher_onglet_finance(
             d5, d6 = st.columns(2)
             d5.metric("Solde annuel communauté", f"{finance['solde_communaute']:,.2f} €".replace(",", " "))
             d6.metric("Gain cumulé 10 ans", f"{finance['gain_10_ans_communaute']:,.2f} €".replace(",", " "))
+
+
+
+
+
+
 
 # ==========================================
 # MAIN
@@ -2788,6 +3156,10 @@ def main():
         else:
             df["Conso_Borne"] = 0.0
 
+
+
+
+
         if sidebar_data["chauffe_eau_actif"]:
             df["Conso_ChauffeEau"] = generer_profil_borne(
                 df["Date&Time"],
@@ -2806,13 +3178,19 @@ def main():
                 sidebar_data["jours_pac"]
             )
 
-            coeffs_pac_mensuels = {
-                1: 1.40, 2: 1.30, 3: 1.10, 4: 0.80,
-                5: 0.40, 6: 0.20, 7: 0.10, 8: 0.10,
-                9: 0.30, 10: 0.70, 11: 1.10, 12: 1.40
+            coeffs_pac_mensuels = sidebar_data.get(
+                "coeffs_pac_mensuels",
+                [1.40, 1.30, 1.10, 0.80, 0.40, 0.20, 0.10, 0.10, 0.30, 0.70, 1.10, 1.40]
+            )
+
+            coeffs_pac_dict = {
+                mois: coeffs_pac_mensuels[mois - 1]
+                for mois in range(1, 13)
             }
 
-            coeff_pac = df["Date&Time"].dt.month.map(coeffs_pac_mensuels).fillna(1.0)
+            coeff_pac = df["Date&Time"].dt.month.map(coeffs_pac_dict).fillna(1.0)
+
+
             conso_pac_modulee = conso_pac_base * coeff_pac
 
             total_base = conso_pac_base.sum()
@@ -2825,6 +3203,11 @@ def main():
                 df["Conso_PAC"] = conso_pac_modulee
         else:
             df["Conso_PAC"] = 0.0
+
+
+
+
+
 
         if sidebar_data["chauffage_active"]:
             df["Conso_Chauffage"] = generer_profil_borne(
@@ -2890,7 +3273,8 @@ def main():
 
     finance_pv = calculer_analyse_financiere(
         mon_tableau_pv,
-        budget_pv["cout_total_net"]
+        budget_pv["cout_total_net"],
+        cout_om_annuel=budget_pv.get("cout_om_total_annuel", 0.0)
     )
 
     # =========================================================
@@ -2914,8 +3298,8 @@ def main():
             puiss_w=sidebar_data["puiss_w"]
         )
 
-        capa_kwh_budget = sidebar_data.get("capa_kwh_nominale", sidebar_data["capa_kwh"])
-        capa_wh_budget = sidebar_data.get("capa_wh_nominale", sidebar_data["capa_wh"])
+        capa_kwh_budget = sidebar_data.get("capa_kwh_commerciale", sidebar_data["capa_kwh"])
+        capa_wh_budget = sidebar_data.get("capa_wh_commerciale", sidebar_data["capa_wh"])
 
         budget_pv_batt = calculer_budget(
             puissance_crete=data_import["puissance_crete"],
@@ -2928,7 +3312,8 @@ def main():
 
         finance_pv_batt = calculer_analyse_financiere(
             mon_tableau_pv_batt,
-            budget_pv_batt["cout_total_net"]
+            budget_pv_batt["cout_total_net"],
+            cout_om_annuel=budget_pv_batt.get("cout_om_total_annuel", 0.0)
         )
 
         budget_pv_batt_ems = budget_pv_batt.copy()
