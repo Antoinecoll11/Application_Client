@@ -2310,13 +2310,13 @@ def afficher_onglet_budget(tab_budget, budget, puissance_crete, activer_batterie
         </div>
         """, height=250)
 
-    st.markdown("""
-    <div style="color:#111111; font-size:14px; line-height:1.5; margin-top:10px;">
-        <strong>Remarque :</strong> les montants affichés sont des estimations basées sur les hypothèses économiques renseignées.
-        Ils peuvent varier selon les prix réels du matériel, les conditions du chantier, les subsides effectivement accordés
-        et les choix techniques retenus. Ces résultats ne constituent en aucun cas une offre commerciale définitive.
-    </div>
-    """, unsafe_allow_html=True)
+        st.markdown("""
+        <div style="color:#111111; font-size:14px; line-height:1.5; margin-top:10px;">
+            <strong>Remarque :</strong> les montants affichés sont des estimations basées sur les hypothèses économiques renseignées.
+            Ils peuvent varier selon les prix réels du matériel, les conditions du chantier, les subsides effectivement accordés
+            et les choix techniques retenus. Ces résultats ne constituent en aucun cas une offre commerciale définitive.
+        </div>
+        """, unsafe_allow_html=True)
 
 # ==========================================
 # ONGLET ANALYSE FINANCIERE
