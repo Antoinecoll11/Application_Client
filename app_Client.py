@@ -39,13 +39,17 @@ def initialiser_session_state():
         "aide_batterie_active": True,
         "cout_ems": 1500.0,
 
+        "prix_electricite_batterie": 0.27,
         "subside_supplementaire": 0.0,
-        "taux_croissance_elec_annuel": 0.0,
+        "taux_croissance_elec_annuel": 3.0,
         "cout_om_pv_par_wc_an": 0.0,
         "cout_om_batterie_par_wh_an": 0.0,
-        "perte_pv_annuelle": 0.0,
-        "perte_batterie_annuelle": 0.0,
+        "perte_pv_annuelle": 0.5,
+        "perte_batterie_annuelle": 0.5,
         "coeffs_pac_mensuels": [1.40, 1.30, 1.10, 0.80, 0.40, 0.20, 0.10, 0.10, 0.30, 0.70, 1.10, 1.40],
+        "mois_chauffage_actifs": ["Jan", "Fév", "Mar", "Avr", "Oct", "Nov", "Déc"],
+        "mode_puissance_chauffe_eau": "2.2 kW",
+        "mode_puissance_chauffage": "1500 W",
     }
 
     for cle, valeur in valeurs_defaut.items():
@@ -477,6 +481,11 @@ def analyser_depassements_puissance(mon_tableau, puissance_reference_kw):
         "taux_depassement": taux_depassement
     }
 
+
+
+
+
+
 # ==========================================
 # FONCTION SAUVEGARDE PDF
 # ==========================================
@@ -552,6 +561,10 @@ def charger_projet_client(tab_chargement):
             "perte_pv_annuelle",
             "perte_batterie_annuelle",
             "coeffs_pac_mensuels",
+            "prix_electricite_batterie",
+            "mois_chauffage_actifs",
+            "mode_puissance_chauffe_eau",
+            "mode_puissance_chauffage",
         ]
 
         if "json_client_deja_charge" not in st.session_state:
@@ -667,6 +680,7 @@ def calculer_indicateurs_annuels(mon_tableau, capa_wh):
         "total_chauffage": total_chauffage
     }
 
+
 def calculer_budget(puissance_crete, activer_batterie, capa_kwh, capa_wh, aide_pv_active=True, aide_batterie_active=True):
     puissance_crete_arrondie = round(puissance_crete, 2)
 
@@ -748,6 +762,7 @@ def calculer_budget(puissance_crete, activer_batterie, capa_kwh, capa_wh, aide_p
     }
 
 def calculer_analyse_financiere(mon_tableau, cout_total_net, cout_om_annuel=0.0):
+    prix_electricite_batterie = st.session_state["prix_electricite_batterie"]
     prix_electricite = st.session_state["prix_electricite"]
     prix_injection = st.session_state["prix_injection"]
     prix_communaute_achat = st.session_state["prix_communaute_achat"]
@@ -762,18 +777,30 @@ def calculer_analyse_financiere(mon_tableau, cout_total_net, cout_om_annuel=0.0)
     cout_sans_installation = round(total_conso_kwh * prix_electricite, 2)
 
     economie_auto_directe = round(total_auto_directe_kwh * prix_electricite, 2)
-    economie_batterie = round(total_batterie_kwh * prix_electricite, 2)
+    economie_batterie = round(total_batterie_kwh * prix_electricite_batterie, 2)
 
     cout_import_normal = round(total_import_kwh * prix_electricite, 2)
     revenu_export_normal = round(total_export_kwh * prix_injection, 2)
     solde_normal = round(cout_import_normal - revenu_export_normal, 2)
-    gain_normal_avant_om = round(cout_sans_installation - solde_normal, 2)
+
+
+
+    gain_normal_avant_om = round(
+        cout_sans_installation
+        - solde_normal
+        + economie_batterie,
+        2
+    )
 
     cout_import_communaute = round(total_import_kwh * prix_communaute_achat, 2)
     revenu_export_communaute = round(total_export_kwh * prix_communaute_vente, 2)
     solde_communaute = round(cout_import_communaute - revenu_export_communaute, 2)
-    gain_communaute_avant_om = round(cout_sans_installation - solde_communaute, 2)
-
+    gain_communaute_avant_om = round(
+        cout_sans_installation
+        - solde_communaute
+        + economie_batterie,
+        2
+    )
     cout_import_mix = round(
         0.5 * total_import_kwh * prix_communaute_achat
         + 0.5 * total_import_kwh * prix_electricite,
@@ -787,7 +814,12 @@ def calculer_analyse_financiere(mon_tableau, cout_total_net, cout_om_annuel=0.0)
     )
 
     solde_mix = round(cout_import_mix - revenu_export_mix, 2)
-    gain_mix_avant_om = round(cout_sans_installation - solde_mix, 2)
+    gain_mix_avant_om = round(
+        cout_sans_installation
+        - solde_mix
+        + economie_batterie,
+        2
+    )
 
 
 
@@ -814,9 +846,26 @@ def calculer_analyse_financiere(mon_tableau, cout_total_net, cout_om_annuel=0.0)
     tr_communaute = (cout_total_net / gain_communaute) if gain_communaute > 0 else None
 
 
-    _, gain_cumule_10_normal = calculer_gains_cumules_avec_croissance(gain_normal, nb_annees=10)
-    _, gain_cumule_10_mix = calculer_gains_cumules_avec_croissance(gain_mix, nb_annees=10)
-    _, gain_cumule_10_communaute = calculer_gains_cumules_avec_croissance(gain_communaute, nb_annees=10)
+    _, gain_cumule_20_normal = calculer_gains_cumules_projection(
+        economie_auto_directe=economie_auto_directe,
+        economie_batterie=economie_batterie,
+        revenu_export=revenu_export_normal,
+        nb_annees=20
+    )
+
+    _, gain_cumule_20_mix = calculer_gains_cumules_projection(
+        economie_auto_directe=economie_auto_directe,
+        economie_batterie=economie_batterie,
+        revenu_export=revenu_export_mix,
+        nb_annees=20
+    )
+
+    _, gain_cumule_20_communaute = calculer_gains_cumules_projection(
+        economie_auto_directe=economie_auto_directe,
+        economie_batterie=economie_batterie,
+        revenu_export=revenu_export_communaute,
+        nb_annees=20
+    )
 
     return {
         "prix_electricite": prix_electricite,
@@ -864,15 +913,18 @@ def calculer_analyse_financiere(mon_tableau, cout_total_net, cout_om_annuel=0.0)
         "tr_communaute": tr_communaute,
 
 
-        "gain_10_ans_normal": round(float(np.asarray(gain_cumule_10_normal).ravel()[-1]), 2),
-        "gain_10_ans_mix": round(float(np.asarray(gain_cumule_10_mix).ravel()[-1]), 2),
-        "gain_10_ans_communaute": round(float(np.asarray(gain_cumule_10_communaute).ravel()[-1]), 2),
+        "gain_20_ans_normal": round(float(np.asarray(gain_cumule_20_normal).ravel()[-1]), 2),
+        "gain_20_ans_mix": round(float(np.asarray(gain_cumule_20_mix).ravel()[-1]), 2),
+        "gain_20_ans_communaute": round(float(np.asarray(gain_cumule_20_communaute).ravel()[-1]), 2),
+        "prix_electricite_batterie": prix_electricite_batterie,
     }
 
-def calculer_gains_cumules_avec_croissance(
-    gain_annuel_initial,
-    nb_annees=15,
-    part_batterie=0.0
+def calculer_gains_cumules_projection(
+    economie_auto_directe=0.0,
+    economie_batterie=0.0,
+    revenu_export=0.0,
+    gain_autre=0.0,
+    nb_annees=20
 ):
     taux_croissance = st.session_state.get("taux_croissance_elec_annuel", 0.0) / 100
     perte_pv = st.session_state.get("perte_pv_annuelle", 0.0) / 100
@@ -888,13 +940,12 @@ def calculer_gains_cumules_avec_croissance(
         facteur_pv = (1 - perte_pv) ** annee
         facteur_batterie = (1 - perte_batterie) ** annee
 
-        gain_pv = gain_annuel_initial * (1 - part_batterie)
-        gain_batterie = gain_annuel_initial * part_batterie
-
         gain_annee = (
-            gain_pv * facteur_pv
-            + gain_batterie * facteur_pv * facteur_batterie
-        ) * facteur_prix
+            economie_auto_directe * facteur_prix * facteur_pv
+            + economie_batterie * facteur_prix * facteur_batterie
+            + revenu_export * facteur_pv
+            + gain_autre * facteur_prix
+        )
 
         cumul += gain_annee
 
@@ -922,6 +973,11 @@ def calculer_roi_depuis_gains_cumules(cout_net, gains_cumules):
             return round(i + fraction, 1)
 
     return None
+
+
+
+
+
 
 
 # ==========================================
@@ -2066,6 +2122,9 @@ def afficher_onglet_annuel(tab_annuel, mon_tableau, indicateurs, capa_wh, active
             else:
                 st.info("Aucune consommation détaillée disponible pour générer le graphique.")
 
+
+
+
 # ==========================================
 # ONGLET BUDGET 
 # ==========================================
@@ -2303,13 +2362,6 @@ def afficher_onglet_budget(tab_budget, budget, puissance_crete, activer_batterie
 
 
 
-
-
-
-
-
-
-
 # ==========================================
 # ONGLET ANALYSE FINANCIERE
 # ==========================================
@@ -2345,12 +2397,18 @@ def afficher_onglet_finance(
         
         with st.expander("⚙️ Hypothèses de calcul", expanded=False):
             h1, h2, h3, h4 = st.columns(4)
+
             h1.metric("Prix achat réseau", f"{finance['prix_electricite']:.2f} €/kWh")
-            h2.metric("Prix vente réseau", f"{finance['prix_injection']:.2f} €/kWh")
-            h3.metric("Prix achat communauté", f"{finance['prix_communaute_achat']:.2f} €/kWh")
-            h4.metric("Prix vente communauté", f"{finance['prix_communaute_vente']:.2f} €/kWh")
-       
-       
+            h2.metric("Prix batterie", f"{finance['prix_electricite_batterie']:.2f} €/kWh")
+            h3.metric("Prix vente réseau", f"{finance['prix_injection']:.2f} €/kWh")
+            h4.metric("Croissance prix élec.", f"{st.session_state['taux_croissance_elec_annuel']:.1f} %/an")
+
+            h5, h6, h7, h8 = st.columns(4)
+
+            h5.metric("Prix achat communauté", f"{finance['prix_communaute_achat']:.2f} €/kWh")
+            h6.metric("Prix vente communauté", f"{finance['prix_communaute_vente']:.2f} €/kWh")
+            h7.metric("Perte PV", f"{st.session_state['perte_pv_annuelle']:.1f} %/an")
+            h8.metric("Perte batterie", f"{st.session_state['perte_batterie_annuelle']:.1f} %/an")
        
         st.markdown("""
         <div style="
@@ -2596,12 +2654,14 @@ def afficher_onglet_finance(
 
 
 
-        nb_annees_roi = 15
+        nb_annees_roi = 20
         annees_roi = np.arange(1, nb_annees_roi + 1)
 
-        _, gains_cumules_pv = calculer_gains_cumules_avec_croissance(
-            finance_pv["gain_normal"],
-            nb_annees_roi
+        _, gains_cumules_pv = calculer_gains_cumules_projection(
+            economie_auto_directe=finance_pv["economie_auto_directe"],
+            economie_batterie=0.0,
+            revenu_export=finance_pv["revenu_export_normal"],
+            nb_annees=nb_annees_roi
         )
 
         cout_net_pv = budget_pv["cout_total_net"]
@@ -2637,10 +2697,11 @@ def afficher_onglet_finance(
                 if finance_pv_batt["gain_normal"] > 0 else 0.0
             )
 
-            _, gains_cumules_pv_batt = calculer_gains_cumules_avec_croissance(
-                finance_pv_batt["gain_normal"],
-                nb_annees_roi,
-                part_batterie=part_batterie
+            _, gains_cumules_pv_batt = calculer_gains_cumules_projection(
+                economie_auto_directe=finance_pv_batt["economie_auto_directe"],
+                economie_batterie=finance_pv_batt["economie_batterie"],
+                revenu_export=finance_pv_batt["revenu_export_normal"],
+                nb_annees=nb_annees_roi
             )
 
             cout_net_pv_batt = budget_pv_batt["cout_total_net"]
@@ -2667,10 +2728,14 @@ def afficher_onglet_finance(
         if resultats_ems is not None and budget_pv_batt_ems is not None and gain_total_ems is not None:
             
             
-            _, gains_cumules_ems = calculer_gains_cumules_avec_croissance(
-                gain_total_ems,
-                nb_annees_roi,
-                part_batterie=part_batterie
+            gain_ems_seul = resultats_ems.get("gain_ems", 0.0)
+
+            _, gains_cumules_ems = calculer_gains_cumules_projection(
+                economie_auto_directe=finance_pv_batt["economie_auto_directe"],
+                economie_batterie=finance_pv_batt["economie_batterie"],
+                revenu_export=resultats_ems["revenu_export_ems"],
+                gain_autre=gain_ems_seul,
+                nb_annees=nb_annees_roi
             )
 
 
@@ -2844,22 +2909,33 @@ def afficher_onglet_finance(
 
 
 
-        nb_annees = 15
+        nb_annees = 20
         annees = np.arange(1, nb_annees + 1)
 
-        _, gains_cumules_normal = calculer_gains_cumules_avec_croissance(
-            finance["gain_normal"],
-            nb_annees
+        part_batterie_communaute = (
+            finance["economie_batterie"] / finance["gain_normal"]
+            if finance["gain_normal"] > 0 else 0.0
         )
 
-        _, gains_cumules_mix = calculer_gains_cumules_avec_croissance(
-            finance["gain_mix"],
-            nb_annees
+        _, gains_cumules_normal = calculer_gains_cumules_projection(
+            economie_auto_directe=finance["economie_auto_directe"],
+            economie_batterie=finance["economie_batterie"],
+            revenu_export=finance["revenu_export_normal"],
+            nb_annees=nb_annees
         )
 
-        _, gains_cumules_communaute = calculer_gains_cumules_avec_croissance(
-            finance["gain_communaute"],
-            nb_annees
+        _, gains_cumules_mix = calculer_gains_cumules_projection(
+            economie_auto_directe=finance["economie_auto_directe"],
+            economie_batterie=finance["economie_batterie"],
+            revenu_export=finance["revenu_export_mix"],
+            nb_annees=nb_annees
+        )
+
+        _, gains_cumules_communaute = calculer_gains_cumules_projection(
+            economie_auto_directe=finance["economie_auto_directe"],
+            economie_batterie=finance["economie_batterie"],
+            revenu_export=finance["revenu_export_communaute"],
+            nb_annees=nb_annees
         )
 
         roi_normal_projete = calculer_roi_depuis_gains_cumules(
@@ -2911,7 +2987,7 @@ def afficher_onglet_finance(
                 </div>
 
                 <div style="font-size:14px; color:#506070; line-height:1.5;">
-                    Gain cumulé à 10 ans : <strong>{f"{finance['gain_10_ans_normal']:,.2f} €".replace(",", " ")}</strong>
+                    Gain cumulé à 20 ans : <strong>{f"{finance['gain_20_ans_normal']:,.2f} €".replace(",", " ")}</strong>
                 </div>
 
                 <div style="font-size:14px; color:#506070; line-height:1.5;">
@@ -2951,7 +3027,7 @@ def afficher_onglet_finance(
 
 
                 <div style="font-size:14px; color:#506070; line-height:1.5;">
-                    Gain cumulé à 10 ans : <strong>{f"{finance['gain_10_ans_mix']:,.2f} €".replace(",", " ")}</strong>
+                    Gain cumulé à 20 ans : <strong>{f"{finance['gain_20_ans_mix']:,.2f} €".replace(",", " ")}</strong>
                 </div>
             </div>
             """, height=220)
@@ -2985,7 +3061,7 @@ def afficher_onglet_finance(
 
 
                 <div style="font-size:14px; color:#506070; line-height:1.5;">
-                    Gain cumulé à 10 ans : <strong>{f"{finance['gain_10_ans_communaute']:,.2f} €".replace(",", " ")}</strong>
+                    Gain cumulé à 20 ans : <strong>{f"{finance['gain_20_ans_communaute']:,.2f} €".replace(",", " ")}</strong>
                 </div>
             </div>
             """, height=220)
@@ -3061,7 +3137,7 @@ def afficher_onglet_finance(
 
             e5, e6 = st.columns(2)
             e5.metric("Solde annuel mixte", f"{finance['solde_mix']:,.2f} €".replace(",", " "))
-            e6.metric("Gain cumulé 10 ans", f"{finance['gain_10_ans_mix']:,.2f} €".replace(",", " "))
+            e6.metric("Gain cumulé 20 ans", f"{finance['gain_20_ans_mix']:,.2f} €".replace(",", " "))
 
         with st.expander("📙 Détail – Communauté", expanded=False):
             d1, d2, d3, d4 = st.columns(4)
@@ -3072,8 +3148,83 @@ def afficher_onglet_finance(
 
             d5, d6 = st.columns(2)
             d5.metric("Solde annuel communauté", f"{finance['solde_communaute']:,.2f} €".replace(",", " "))
-            d6.metric("Gain cumulé 10 ans", f"{finance['gain_10_ans_communaute']:,.2f} €".replace(",", " "))
+            d6.metric("Gain cumulé 20 ans", f"{finance['gain_20_ans_communaute']:,.2f} €".replace(",", " "))
 
+
+
+        st.markdown("""
+        <div style="
+            height: 3px;
+            background: linear-gradient(90deg, transparent, #d7efff 3%, #4ea3e6 50%, #d7efff 97%, transparent);
+            border-radius: 999px;
+            margin: 5px 0 5px 0;
+        "></div>
+        """, unsafe_allow_html=True)
+
+        st.subheader("Scénario avec tarif dynamique (Prix Epex de 2025) ⚡")
+
+        fichier_epex = st.file_uploader(
+            "Importer le fichier EPEX horaire",
+            type=["xlsx", "csv"],
+            key="fichier_epex_dynamique"
+        )
+
+        if fichier_epex is not None:
+            try:
+                resultats_dyn = calculer_tarif_dynamique(mon_tableau, fichier_epex)
+
+                cout_dynamique = resultats_dyn["cout_total_dynamique"]
+                import_kwh = resultats_dyn["import_total_kwh"]
+                prix_moyen = resultats_dyn["prix_moyen_final"]
+
+                prix_fixe = st.session_state["prix_electricite"]
+
+                cout_import_fixe = import_kwh * prix_fixe
+
+                difference = cout_import_fixe - cout_dynamique
+
+                d1, d2, d3, d4, d5 = st.columns(5)
+
+                d1.metric(
+                    "Import réseau analysé",
+                    f"{import_kwh:,.0f} kWh".replace(",", " ")
+                )
+
+                d2.metric(
+                    "Prix moyen dynamique final",
+                    f"{prix_moyen:.3f} €/kWh"
+                )
+
+                d3.metric(
+                    "Coût avec tarif dynamique",
+                    f"{cout_dynamique:,.2f} €".replace(",", " ")
+                )
+
+                d4.metric(
+                    "Coût avec prix fixe",
+                    f"{cout_import_fixe:,.2f} €".replace(",", " ")
+                )
+
+                d5.metric(
+                    "Écart dynamique vs fixe",
+                    f"{difference:,.2f} €".replace(",", " "),
+                    delta=f"{difference:,.2f} €".replace(",", " ")
+                )
+
+                with st.expander("Détail horaire du calcul dynamique", expanded=False):
+                    st.dataframe(
+                        resultats_dyn["df_calc"],
+                        use_container_width=True,
+                        height=400
+                    )
+
+                st.write("Import réseau simulation :", mon_tableau["Import_Reseau"].sum() / 1000, "kWh")
+                st.write("Import réseau tarif dynamique :", resultats_dyn["import_total_kwh"], "kWh")
+
+            except Exception as e:
+                st.error(f"Erreur lors du calcul du tarif dynamique : {e}")
+        else:
+            st.info("Importez un fichier EPEX horaire pour calculer le coût avec tarif dynamique.")
 
 
 
