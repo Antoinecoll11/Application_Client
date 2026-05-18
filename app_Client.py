@@ -18,8 +18,6 @@ BASE_DIR = Path(__file__).resolve().parent
 logo_path = BASE_DIR / "logo.jpg"
 batteries_path = BASE_DIR / "batteries.xlsx"
 panneau_path = BASE_DIR / "panneau.jpg"
-
-
 # ==========================================
 # INITIALISATION
 # ==========================================
@@ -481,15 +479,9 @@ def analyser_depassements_puissance(mon_tableau, puissance_reference_kw):
         "taux_depassement": taux_depassement
     }
 
-
-
-
-
-
 # ==========================================
 # FONCTION SAUVEGARDE PDF
 # ==========================================
-
 def charger_projet_client(tab_chargement):
     with tab_chargement:
         st.header("Chargement du projet client")
@@ -610,7 +602,6 @@ def charger_projet_client(tab_chargement):
 # ==========================================
 # CHARGEMENT DES DONNÉES
 # ==========================================
-
 def charger_batteries():
     try:
         df_batteries = pd.read_excel(batteries_path)
@@ -619,12 +610,9 @@ def charger_batteries():
     except Exception:
         return pd.DataFrame()
 
-
-
 # ==========================================
 # CALCULS SYNTHÉTIQUES
 # ==========================================
-
 def calculer_indicateurs_annuels(mon_tableau, capa_wh):
     total_prod = mon_tableau['Inverter Output'].sum() / 1000
     total_conso = mon_tableau['Consumption'].sum() / 1000
@@ -679,7 +667,6 @@ def calculer_indicateurs_annuels(mon_tableau, capa_wh):
         "total_pac": total_pac,
         "total_chauffage": total_chauffage
     }
-
 
 def calculer_budget(puissance_crete, activer_batterie, capa_kwh, capa_wh, aide_pv_active=True, aide_batterie_active=True):
     puissance_crete_arrondie = round(puissance_crete, 2)
@@ -974,16 +961,9 @@ def calculer_roi_depuis_gains_cumules(cout_net, gains_cumules):
 
     return None
 
-
-
-
-
-
-
 # ==========================================
 # AFFICHAGE EN-TÊTE
 # ==========================================
-
 def afficher_entete():
 
     col1, col2 = st.columns([2.2, 1.1], vertical_alignment="center")
@@ -1006,7 +986,6 @@ def afficher_entete():
 # ==========================================
 # SIDEBAR
 # ==========================================
-
 def afficher_sidebar():
 
     st.sidebar.markdown("""
@@ -1503,7 +1482,6 @@ def afficher_sidebar():
 # ==========================================
 # ONGLET SAISONS
 # ==========================================
-
 def afficher_onglet_saisons(tab_saisons, mon_tableau, activer_batterie, puissance_reference_active, puissance_reference_kw):
     with tab_saisons:
         st.header("Analyse des 4 Saisons")
@@ -1618,7 +1596,6 @@ def afficher_onglet_saisons(tab_saisons, mon_tableau, activer_batterie, puissanc
 # ==========================================
 # ONGLET MENSUEL
 # ==========================================
-
 def afficher_onglet_mensuel(tab_mensuel, mon_tableau):
     with tab_mensuel:
         st.header("Bilan Énergétique Mensuel")
@@ -1694,7 +1671,6 @@ def afficher_onglet_mensuel(tab_mensuel, mon_tableau):
 # ==========================================
 # ONGLET ANNUEL
 # ==========================================
-
 def afficher_onglet_annuel(tab_annuel, mon_tableau, indicateurs, capa_wh, activer_batterie):
     with tab_annuel:
         st.header("Flux d'Énergie Annuel")
@@ -2124,13 +2100,9 @@ def afficher_onglet_annuel(tab_annuel, mon_tableau, indicateurs, capa_wh, active
             else:
                 st.info("Aucune consommation détaillée disponible pour générer le graphique.")
 
-
-
-
 # ==========================================
 # ONGLET BUDGET 
 # ==========================================
-
 def afficher_onglet_budget(tab_budget, budget, puissance_crete, activer_batterie):
     with tab_budget:
         st.header("Investissement initial 📊")
@@ -2299,24 +2271,6 @@ def afficher_onglet_budget(tab_budget, budget, puissance_crete, activer_batterie
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
         components.html(f"""
         <div style="
             background: #ffffff;
@@ -2356,18 +2310,17 @@ def afficher_onglet_budget(tab_budget, budget, puissance_crete, activer_batterie
         </div>
         """, height=250)
 
-        st.markdown("""
-        <small style="color:gray;">
-        Les montants affichés sont des estimations basées sur des hypothèses économiques et ne reflètent pas nécessairement le coût réel final de l’installation.
-        </small>
-        """, unsafe_allow_html=True)
-
-
+    st.markdown("""
+    <div style="color:#111111; font-size:14px; line-height:1.5; margin-top:10px;">
+        <strong>Remarque :</strong> les montants affichés sont des estimations basées sur les hypothèses économiques renseignées.
+        Ils peuvent varier selon les prix réels du matériel, les conditions du chantier, les subsides effectivement accordés
+        et les choix techniques retenus. Ces résultats ne constituent en aucun cas une offre commerciale définitive.
+    </div>
+    """, unsafe_allow_html=True)
 
 # ==========================================
 # ONGLET ANALYSE FINANCIERE
 # ==========================================
-
 def afficher_onglet_finance(
     tab_finance,
     mon_tableau,
@@ -2384,6 +2337,13 @@ def afficher_onglet_finance(
 ):
     
     with tab_finance:
+
+        st.info(
+            "Cette analyse financière est une estimation basée sur les hypothèses du projet. "
+            "Les résultats peuvent varier selon les prix réels de l’électricité, les conditions d’utilisation, "
+            "les tarifs d’injection, les subsides disponibles et les performances réelles de l’installation."
+        )
+
         st.markdown('<div class="finance-section-title">Analyse financière</div>', unsafe_allow_html=True)
         st.markdown(
             '<div class="finance-section-desc">Comparaison des scénarios de valorisation de l’énergie et projection des gains cumulés sur 10 ans.</div>',
@@ -3151,12 +3111,6 @@ def afficher_onglet_finance(
             d5, d6 = st.columns(2)
             d5.metric("Solde annuel communauté", f"{finance['solde_communaute']:,.2f} €".replace(",", " "))
             d6.metric("Gain cumulé 20 ans", f"{finance['gain_20_ans_communaute']:,.2f} €".replace(",", " "))
-
-
-
-
-
-
 
 # ==========================================
 # MAIN
